@@ -1,0 +1,98 @@
+deployment:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    maxSurge: 1
+    maxUnavailable: 0
+  containers:
+    - name: sonarr-low-res
+      image: 
+        repository: ghcr.io/hotio/sonarr
+        tag: latest
+      ports:
+        - name: http
+          containerPort: 8989
+      env:
+        - name: PUID
+          value: "1000"
+        - name: PGID
+          value: "1000"
+        - name: UMASK
+          value: "002"
+        - name: TZ
+          value: Europe/Bucharest
+      resources:
+        requests:
+          cpu: 0m
+          memory: 0Mi
+        limits:
+          cpu: 1000m
+          memory: 1000Mi
+      volumeMounts:
+        - name: storage
+          mountPath: /config
+          subPath: sonarr/low/config
+        - name: storage
+          mountPath: /downloads
+          subPath: media/downloads
+  volumes:
+    - name: storage
+      type: pvc
+      typeName: storage-pvc
+
+ingresses:
+  - name: ingress
+    annotations:
+      nginx.ingress.kubernetes.io/auth-url: https://snrl.@vault(secrets/data/domain main | DOMAIN_NAME)/oauth2/auth
+      nginx.ingress.kubernetes.io/auth-signin: https://snrl.@vault(secrets/data/domain main | DOMAIN_NAME)/oauth2/start?rd=$escaped_request_uri
+    tls:
+      secretName: tls-secret
+    hosts:
+      - host: snrl.@vault(secrets/data/domain main | DOMAIN_NAME)
+        paths:
+          - path: "/"
+            pathType: Prefix
+            serviceName: service
+            servicePort: http
+  - name: oauth2-ingress
+    tls:
+      secretName: tls-secret
+    hosts:
+      - host: snrl.@vault(secrets/data/domain main | DOMAIN_NAME)
+        paths:
+          - path: /oauth2
+            pathType: Prefix
+            serviceName: oauth2-service
+            servicePort: 80
+
+pvcs:
+  - name: storage-pvc
+    storageClassName: local-path-persistent
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+    volumeMode: Filesystem
+
+services:
+  - name: service
+    type: ClusterIP
+    ports:
+      - name: http
+        protocol: TCP
+        port: 80
+        targetPort: 8989
+  - name: oauth2-service
+    type: ExternalName
+    externalName: service.oauth2-proxy.svc.cluster.local
+    ports:
+      - name: http
+        protocol: TCP
+        port: 80
+
+vaultSecrets:
+  - name: tls-secret
+    type: kubernetes.io/tls
+    path: secrets/certificates
+    templates:
+      tls.crt: "{% .Secrets.tls_crt %}"
+      tls.key: "{% .Secrets.tls_key %}"
